@@ -1,4 +1,10 @@
 -- Last Stop Autonomous Farming Engine Autoexec Loader
+-- Guard: autoexec + queue_on_teleport can both fire; run once per server session
+do
+    local genv = getgenv and getgenv() or _G
+    if genv.LastStopLoader_Job == game.JobId and game.JobId ~= "" then return end
+    genv.LastStopLoader_Job = game.JobId
+end
 task.spawn(function()
     repeat task.wait(0.5) until game:IsLoaded() and game.Players.LocalPlayer
     task.wait(2.5)
@@ -134,106 +140,166 @@ task.spawn(function()
                 dismissPopups()
                 task.wait(0.5)
 
-                -- 2. Zone stepping: iterate available lobby zones until CreateLobby GUI opens
-                local char = lp.Character or lp.CharacterAdded:Wait()
-                local hrp = char:WaitForChild("HumanoidRootPart", 10)
-                local lc = workspace.Map and workspace.Map:FindFirstChild("LoobyCreate")
-
-                local cl = pg:FindFirstChild("CreateLobby")
-                local mf = cl and cl:FindFirstChild("MainFrame")
-
-                if not (mf and mf.Visible) then
-                    local zoneList = {"Lobby1", "Lobby2", "Lobby3"}
-                    for _, zoneName in ipairs(zoneList) do
-                        dismissPopups()
-                        local lobbyModel = lc and lc:FindFirstChild(zoneName)
-                        local zonePart = lobbyModel and lobbyModel:FindFirstChild("Zone")
-                        if hrp and zonePart then
-                            for _ = 1, 3 do
-                                hrp.CFrame = zonePart.CFrame + Vector3.new(0, 3, 0)
-                                task.wait(0.25)
-                            end
-
-                            -- Check if CreateLobby appeared
-                            local tCheck = os.clock()
-                            while os.clock() - tCheck < 2.0 do
-                                cl = pg:FindFirstChild("CreateLobby")
-                                mf = cl and cl:FindFirstChild("MainFrame")
-                                if mf and mf.Visible then break end
-                                task.wait(0.2)
-                            end
-                            if mf and mf.Visible then break end
-                        end
+                -- Helper: Press BottomHUD.Play button to open CreateLobby (bypasses zone stepping)
+                local function pressPlayButton()
+                    dismissPopups()
+                    local playBtn = pg and pg:FindFirstChild("Main") and pg.Main:FindFirstChild("HUD") and pg.Main.HUD:FindFirstChild("BottomHUD") and pg.Main.HUD.BottomHUD:FindFirstChild("Play")
+                    if playBtn and playBtn:IsA("GuiButton") and playBtn.Visible then
+                        clickBtn(playBtn)
+                        return true
                     end
-                end
-
-                -- Fallback: Call Knit LobbyController.CreateLobby() if zone step did not open GUI
-                if not (mf and mf.Visible) then
+                    -- Fallback: Call Knit LobbyController.CreateLobby() directly
+                    local called = false
                     pcall(function()
                         local knit = require(game:GetService("ReplicatedStorage").ClientSource.Mutual.Packages.Knit)
                         local lobbyCtrl = knit.GetController("LobbyController")
                         if lobbyCtrl and lobbyCtrl.CreateLobby then
                             lobbyCtrl.CreateLobby()
+                            called = true
                         end
                     end)
-                    task.wait(1.0)
-                    cl = pg:FindFirstChild("CreateLobby")
-                    mf = cl and cl:FindFirstChild("MainFrame")
+                    return called
                 end
 
-                -- 3. Configure and click CreateButton
-                if mf then
-                    -- Select MaxPlayers: 1
-                    local p1 = mf.MaxPlayers:FindFirstChild("1") and mf.MaxPlayers["1"]:FindFirstChild("Button")
-                    if p1 then
-                        clickBtn(p1)
-                    end
-                    task.wait(0.25)
+                -- Helper: Configure settings inside CreateLobby and click CreateButton
+                local function configureAndCreate()
+                    local cl = pg:FindFirstChild("CreateLobby")
+                    local mf = cl and cl:FindFirstChild("MainFrame")
+                    if not (mf and mf.Visible) then return false end
 
-                    -- Select Game Mode: targetMode or Nightmare or Classic
-                    local modeFrame = mf.GameModes.ScrollingFrame:FindFirstChild(targetMode)
-                        or mf.GameModes.ScrollingFrame:FindFirstChild("Nightmare")
-                        or mf.GameModes.ScrollingFrame:FindFirstChild("Classic")
-                    local modeBtn = modeFrame and modeFrame:FindFirstChild("Button")
-                    if modeBtn then
-                        clickBtn(modeBtn)
-                    end
-                    task.wait(0.25)
+                    -- 1. Max Players = 1 (Solo)
+                    pcall(function()
+                        local mp = mf:FindFirstChild("MaxPlayers")
+                        local p1 = mp and mp:FindFirstChild("1") and mp["1"]:FindFirstChild("Button")
+                        if p1 then clickBtn(p1) end
+                    end)
+                    task.wait(0.15)
 
-                    -- Click Create Button
+                    -- 2. Game Mode (Nightmare or configured targetMode)
+                    pcall(function()
+                        local gm = mf:FindFirstChild("GameModes")
+                        local sf = gm and gm:FindFirstChild("ScrollingFrame")
+                        local modeFrame = sf and (sf:FindFirstChild(targetMode) or sf:FindFirstChild("Nightmare") or sf:FindFirstChild("Classic"))
+                        local modeBtn = modeFrame and modeFrame:FindFirstChild("Button")
+                        if modeBtn then clickBtn(modeBtn) end
+                    end)
+                    task.wait(0.15)
+
+                    -- 3. Private Room Toggle (ensures other players cannot enter)
+                    pcall(function()
+                        local priv = mf:FindFirstChild("Private")
+                        if priv and priv:IsA("GuiButton") then
+                            local checkmark = priv:FindFirstChild("Check") or priv:FindFirstChild("Active") or priv:FindFirstChild("Selected")
+                            if not (checkmark and checkmark.Visible) then
+                                clickBtn(priv)
+                            end
+                        end
+                    end)
+                    task.wait(0.15)
+
+                    -- 4. Click CreateButton
                     local createBtn = mf:FindFirstChild("CreateButton")
                     if createBtn then
                         clickBtn(createBtn)
                     end
+
+                    -- Direct Knit fallback: LobbyService:LobbyMethod("Create", ...)
+                    pcall(function()
+                        local knit = require(game:GetService("ReplicatedStorage").ClientSource.Mutual.Packages.Knit)
+                        local ls = knit.GetService("LobbyService")
+                        if ls and ls.LobbyMethod then
+                            ls:LobbyMethod("Create", {Mode = targetMode, MaxPlayers = 1, Private = true})
+                        end
+                    end)
+
+                    return true
                 end
 
-                -- 4. InLobby Auto-Start Watcher Loop (CRITICAL FIX FOR 1s / DISBAND-START SCREEN STUCK)
-                -- Continuously monitors for InLobby / Start button and clicks it until match teleports!
+                -- Helper: Check if room has been created (InLobby GUI visible)
+                local function isInRoom()
+                    local inLobby = pg:FindFirstChild("InLobby")
+                    return inLobby and inLobby:FindFirstChild("MainFrame") and inLobby.MainFrame.Visible
+                end
+
+                -- ================================================================
+                -- ROOM CREATION RETRY LOOP:
+                -- Press "Play" repeatedly until room is successfully created.
+                -- If room creation fails (e.g. server lobbies full), retries Play until room is open.
+                -- ================================================================
+                local loopStart = os.clock()
+                local lastPressPlay = 0
+                local lastCreateClick = 0
+                local createLobbyOpenTime = 0
+
+                while os.clock() - loopStart < 180.0 do
+                    if isInRoom() then break end
+
+                    dismissPopups()
+
+                    local cl = pg:FindFirstChild("CreateLobby")
+                    local mf = cl and cl:FindFirstChild("MainFrame")
+
+                    if mf and mf.Visible then
+                        if createLobbyOpenTime == 0 then
+                            createLobbyOpenTime = os.clock()
+                        end
+
+                        -- If CreateLobby has been stuck open for > 6 seconds without transitioning to InLobby (e.g. room full error), close and re-press Play
+                        if os.clock() - createLobbyOpenTime > 6.0 then
+                            local closeBtn = mf:FindFirstChild("CloseButton")
+                            if closeBtn then clickBtn(closeBtn) end
+                            createLobbyOpenTime = 0
+                            task.wait(0.5)
+                        else
+                            -- Configure and click Create Lobby button every 1.2s
+                            if os.clock() - lastCreateClick >= 1.2 then
+                                lastCreateClick = os.clock()
+                                configureAndCreate()
+                            end
+                        end
+                    else
+                        createLobbyOpenTime = 0
+                        -- CreateLobby GUI not open: press "Play" button every 1.5s until it opens or room enters
+                        if os.clock() - lastPressPlay >= 1.5 then
+                            lastPressPlay = os.clock()
+                            pressPlayButton()
+                        end
+                    end
+
+                    task.wait(0.3)
+                end
+
+                -- ================================================================
+                -- IN-LOBBY AUTO-START WATCHER LOOP:
+                -- Once room is created, click "Start" until match teleports
+                -- ================================================================
                 local roomWaitStart = os.clock()
-                while os.clock() - roomWaitStart < 35.0 do
-                    -- Direct Target: PlayerGui.InLobby.MainFrame.Start
+                while os.clock() - roomWaitStart < 60.0 do
+                    dismissPopups()
+
                     local inLobby = pg:FindFirstChild("InLobby")
                     local startBtn = inLobby and inLobby:FindFirstChild("MainFrame") and inLobby.MainFrame:FindFirstChild("Start")
+
+                    if not isInRoom() and os.clock() - roomWaitStart > 5.0 then
+                        -- If room was unexpectedly lost, trigger Play again
+                        pressPlayButton()
+                        task.wait(0.5)
+                        configureAndCreate()
+                    end
+
                     if startBtn and startBtn:IsA("GuiButton") and startBtn.Visible then
                         clickBtn(startBtn)
                     end
 
-                    -- Secondary Target: Any visible Start button across all PlayerGui
-                    for _, b in ipairs(pg:GetDescendants()) do
-                        if b:IsA("GuiButton") and b.Visible then
-                            local n = b.Name:lower()
-                            local t = ""
-                            if b:IsA("TextButton") then
-                                t = b.Text:lower()
-                            else
-                                local lbl = b:FindFirstChildOfClass("TextLabel")
-                                if lbl then t = lbl.Text:lower() end
-                            end
-                            if n == "start" or n == "startbtn" or t == "start" then
-                                clickBtn(b)
-                            end
+                    -- Also invoke Knit LobbyService:Play() directly as parallel guarantee
+                    pcall(function()
+                        local knit = require(game:GetService("ReplicatedStorage").ClientSource.Mutual.Packages.Knit)
+                        local ls = knit.GetService("LobbyService")
+                        if ls and ls.Play then
+                            ls:Play()
                         end
-                    end
+                    end)
+
                     task.wait(0.5)
                 end
             end)
