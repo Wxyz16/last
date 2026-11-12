@@ -1624,6 +1624,7 @@ end
 -- Kill Aura Loop (Pure math dispatch, 0 screen shake, dynamic Vault Vampire Sword cycling)
 -- Forward declarations: assigned later in the Ticket Auto-Farm section
 local GetCheckpointWaveEntities
+local RestoreCharacterPhysics, GetBusModel -- used before their definitions below
 local AutoFarmState
 local LastAuraAttack = 0
 RegisterConnection(RunService.Heartbeat:Connect(function()
@@ -2031,7 +2032,7 @@ local function TryInteractWithCheckpointObjects(cpIndex)
     end)
 end
 
-local function RestoreCharacterPhysics()
+function RestoreCharacterPhysics()
     local char = GetCharacter()
     if not char then return end
     for _, part in ipairs(char:GetDescendants()) do
@@ -2127,7 +2128,7 @@ RegisterConnection(RunService.Heartbeat:Connect(function()
     end
 end))
 
-local function GetBusModel()
+function GetBusModel()
     return ItemContainer and ItemContainer:FindFirstChild("Bus")
 end
 
